@@ -5,6 +5,8 @@
 #   DATA=construction-ppe.yaml EPOCHS=150 bash train.sh
 #   DATA=coco8.yaml EPOCHS=5 bash train.sh          # 冒烟测试链路
 #   USE_GPU=0 bash train.sh                         # 无 NVIDIA GPU 时用 CPU(很慢)
+#   PROXY=http://127.0.0.1:5782 bash train.sh       # 挂宿主机代理(默认已挂 5782，下数据集用)
+#   PROXY= bash train.sh                            # 不挂代理
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -17,10 +19,21 @@ IMGSZ="${IMGSZ:-640}"
 BATCH="${BATCH:-16}"                    # 显存小可设小，或设 -1 让其自动
 NAME="${NAME:-exp}"                     # 输出子目录：runs/<NAME>
 USE_GPU="${USE_GPU:-1}"                 # 1=用 GPU，0=CPU
+# 宿主机代理(下数据集/依赖走境外时用)。默认挂 5782；置空 PROXY= 则不挂；SOCKS 用 socks5://127.0.0.1:5782
+PROXY="${PROXY:-http://127.0.0.1:5782}"
 # -----------------------------------------------
 
 GPU_FLAG=""
 [ "$USE_GPU" = "1" ] && GPU_FLAG="--gpus all"
+
+# 代理：用 --network host，容器内 127.0.0.1 才能连到宿主机的代理端口
+NET_FLAG=""
+PROXY_ARGS=""
+if [ -n "$PROXY" ]; then
+  NET_FLAG="--network host"
+  PROXY_ARGS="-e HTTP_PROXY=$PROXY -e HTTPS_PROXY=$PROXY -e http_proxy=$PROXY -e https_proxy=$PROXY -e NO_PROXY=localhost,127.0.0.1 -e no_proxy=localhost,127.0.0.1"
+  echo "[*] 已挂代理: $PROXY (--network host)"
+fi
 
 # 镜像不存在则先构建
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
@@ -33,7 +46,7 @@ mkdir -p datasets runs
 echo "[*] 训练参数： data=$DATA model=$MODEL epochs=$EPOCHS imgsz=$IMGSZ batch=$BATCH gpu=$USE_GPU name=$NAME"
 
 # --ipc=host / --shm-size：PyTorch 多进程 dataloader 需要更大的共享内存，否则会 worker 被杀
-docker run --rm -it $GPU_FLAG --ipc=host \
+docker run --rm -it $GPU_FLAG --ipc=host $NET_FLAG $PROXY_ARGS \
   -v "$(pwd)":/workspace -w /workspace \
   "$IMAGE" bash -lc "
     yolo settings datasets_dir=/workspace/datasets >/dev/null 2>&1 || true
