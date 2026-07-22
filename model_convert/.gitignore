@@ -1,0 +1,5 @@
+# 大文件/中间产物不入库
+*.onnx
+*.rknn
+model/
+calib/

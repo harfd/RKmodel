@@ -1,0 +1,7 @@
+# 训练产物与大文件不入库
+datasets/
+runs/
+.ultralytics/
+*.pt
+*.onnx
+*.rknn
