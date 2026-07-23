@@ -26,7 +26,21 @@ GPU_FLAG=""; [ "$USE_GPU" = "1" ] && GPU_FLAG="--gpus all"
 [ -d yolov5 ] || { echo "[!] 缺 yolov5/ 目录。先执行： git clone https://github.com/airockchip/yolov5.git"; exit 1; }
 [ -f "$DATA_YAML" ] || { echo "[!] 缺 $DATA_YAML。先执行： bash prepare_dataset.sh"; exit 1; }
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" .
-mkdir -p runs
+mkdir -p runs _patch
+
+# sitecustomize 补丁：让 torch.load 默认 weights_only=False（PyTorch>=2.6 加载旧 yolov5 权重需要）
+cat > _patch/sitecustomize.py <<'PYEOF'
+try:
+    import torch, functools
+    _orig = torch.load
+    @functools.wraps(_orig)
+    def _load(*a, **k):
+        k.setdefault('weights_only', False)
+        return _orig(*a, **k)
+    torch.load = _load
+except Exception:
+    pass
+PYEOF
 
 echo "[*] data=$DATA_YAML cfg=$CFG weights=$WEIGHTS epochs=$EPOCHS imgsz=$IMGSZ batch=$BATCH name=$NAME gpu=$USE_GPU"
 
@@ -39,6 +53,7 @@ docker run --rm -it $GPU_FLAG --ipc=host \
     # 一次性装齐 yolov5 依赖，但排除 torch/torchvision(避免动掉 CUDA torch；yolov5 的 pin 都是 >= 不会降级)
     grep -viE '^[[:space:]]*(torch|torchvision)([[:space:]]|>|=|<|\$)' requirements.txt > /tmp/req.txt 2>/dev/null || cp requirements.txt /tmp/req.txt
     pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt 2>/dev/null || true
+    export PYTHONPATH=/workspace/_patch:\${PYTHONPATH:-}
     python train.py \
       --data /workspace/$DATA_YAML --cfg $CFG --weights $WEIGHTS \
       --img $IMGSZ --epochs $EPOCHS --batch-size $BATCH \

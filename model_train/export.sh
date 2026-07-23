@@ -13,9 +13,24 @@ WEIGHTS="${WEIGHTS:-runs/ppe/weights/best.pt}"   # 相对本目录
 [ -d yolov5 ] || { echo "[!] 缺 yolov5/ 目录"; exit 1; }
 [ -f "$WEIGHTS" ] || { echo "[!] 找不到权重： $WEIGHTS（先训练，或用 WEIGHTS=... 指定）"; exit 1; }
 
+mkdir -p _patch
+cat > _patch/sitecustomize.py <<'PYEOF'
+try:
+    import torch, functools
+    _orig = torch.load
+    @functools.wraps(_orig)
+    def _load(*a, **k):
+        k.setdefault('weights_only', False)
+        return _orig(*a, **k)
+    torch.load = _load
+except Exception:
+    pass
+PYEOF
+
 docker run --rm -it -v "$(pwd)":/workspace -w /workspace "$IMAGE" bash -lc "
   cd /workspace/yolov5
   git config --global --add safe.directory '*'
+  export PYTHONPATH=/workspace/_patch:\${PYTHONPATH:-}
   grep -viE '^[[:space:]]*(torch|torchvision)([[:space:]]|>|=|<|\$)' requirements.txt > /tmp/req.txt 2>/dev/null || cp requirements.txt /tmp/req.txt
   pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt 2>/dev/null || true
   python export.py --rknpu --weight /workspace/$WEIGHTS
