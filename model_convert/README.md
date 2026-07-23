@@ -1,6 +1,12 @@
 # model_convert —— ONNX → RKNN 转换容器
 
-把 YOLOv8 的 ONNX 转成 RK3588 能跑的 `.rknn`（含 int8 量化），用 **rknn-toolkit2** 独立容器完成。
+> ⚠️ **已切换为 rknn-toolkit2 1.5.2**（匹配板端 1.5.2 运行时）。1.5.2 不在 PyPI，需从
+> `rockchip-linux/rknn-toolkit2` 的 v1.5.2 拿 whl+requirements 放到本目录 `wheels/` 下再 build（见 [`../README.md`](../README.md) 阶段②）。
+> 下方旧文档中「rknn-toolkit2 2.3.2 / pip 安装」的部分已不适用。
+
+---
+
+把 YOLOv5 的 ONNX 转成 RK3588 能跑的 `.rknn`（含 int8 量化），用 **rknn-toolkit2 1.5.2** 独立容器完成。
 这是「训练 → 上板」链路的**第二环**；第一环（训练 + 导出 ONNX）在训练容器 `model_train`（见其 README）。
 
 ```

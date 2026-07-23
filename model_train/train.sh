@@ -1,61 +1,44 @@
 #!/usr/bin/env bash
-# 启动 YOLOv8 训练任务（容器内运行，产物持久化到宿主机 model_train/ 目录）
-# 用法示例：
-#   bash train.sh                                   # 用默认参数(非洲野生动物数据集)训练
-#   DATA=construction-ppe.yaml EPOCHS=150 bash train.sh
-#   DATA=coco8.yaml EPOCHS=5 bash train.sh          # 冒烟测试链路
-#   USE_GPU=0 bash train.sh                         # 无 NVIDIA GPU 时用 CPU(很慢)
-#   (Docker Desktop 请在 Settings→Resources→Proxies 里配代理，train.sh 不用挂)
-#   PROXY=http://127.0.0.1:5782 bash train.sh       # 仅"原生 Docker"想给容器挂代理时用
+# 训练"经典 anchor 版 YOLOv5"(airockchip/yolov5)——产出能复用项目现有 YOLOv5 后处理的模型。
+# 注意：不是 ultralytics 包里的 yolov5nu(那是 anchor-free 的 YOLOv5u，和现有后处理不匹配)。
+#
+# 前置：
+#   1) 本目录下已 clone: git clone https://github.com/airockchip/yolov5.git
+#   2) 已跑 bash prepare_dataset.sh 生成 _yolov5_data.yaml
+# 用法：
+#   bash train.sh
+#   CFG=yolov5n.yaml WEIGHTS=yolov5n.pt EPOCHS=200 NAME=ppe bash train.sh
 set -euo pipefail
 cd "$(dirname "$0")"
 
-# ---------- 可配置参数(用环境变量覆盖) ----------
 IMAGE="${IMAGE:-yolo-train:latest}"
-DATA="${DATA:-african-wildlife.yaml}"   # 数据集 yaml：内置的会自动下载，也可指向自己的
-MODEL="${MODEL:-yolov8n.pt}"            # 基础权重：yolov8n/s/m/l/x.pt（首次自动下载）
-EPOCHS="${EPOCHS:-100}"
+DATA_YAML="${DATA_YAML:-_yolov5_data.yaml}"   # prepare_dataset.sh 生成的
+CFG="${CFG:-yolov5s.yaml}"                    # 模型结构 yolov5n/s/m.yaml（多路实时选 n 或 s）
+WEIGHTS="${WEIGHTS:-yolov5s.pt}"              # 预训练权重（首次自动从 github 下，需联网/代理）
+EPOCHS="${EPOCHS:-150}"
 IMGSZ="${IMGSZ:-640}"
-BATCH="${BATCH:-16}"                    # 显存小可设小，或设 -1 让其自动
-NAME="${NAME:-exp}"                     # 输出子目录：runs/<NAME>
-USE_GPU="${USE_GPU:-1}"                 # 1=用 GPU，0=CPU
-# 代理：默认不挂(Docker Desktop 在 Settings→Resources→Proxies 里全局配即可)。
-# 仅原生 Docker 想给容器挂代理才设：PROXY=http://127.0.0.1:5782（SOCKS 用 socks5://）
-PROXY="${PROXY-}"
-# -----------------------------------------------
+BATCH="${BATCH:-16}"
+NAME="${NAME:-ppe}"
+USE_GPU="${USE_GPU:-1}"
 
-GPU_FLAG=""
-[ "$USE_GPU" = "1" ] && GPU_FLAG="--gpus all"
+GPU_FLAG=""; [ "$USE_GPU" = "1" ] && GPU_FLAG="--gpus all"
 
-# 代理：用 --network host，容器内 127.0.0.1 才能连到宿主机的代理端口
-NET_FLAG=""
-PROXY_ARGS=""
-if [ -n "$PROXY" ]; then
-  NET_FLAG="--network host"
-  PROXY_ARGS="-e HTTP_PROXY=$PROXY -e HTTPS_PROXY=$PROXY -e http_proxy=$PROXY -e https_proxy=$PROXY -e NO_PROXY=localhost,127.0.0.1 -e no_proxy=localhost,127.0.0.1"
-  echo "[*] 已挂代理: $PROXY (--network host)"
-fi
+[ -d yolov5 ] || { echo "[!] 缺 yolov5/ 目录。先执行： git clone https://github.com/airockchip/yolov5.git"; exit 1; }
+[ -f "$DATA_YAML" ] || { echo "[!] 缺 $DATA_YAML。先执行： bash prepare_dataset.sh"; exit 1; }
+docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" .
+mkdir -p runs
 
-# 镜像不存在则先构建
-if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "[*] 镜像 $IMAGE 不存在，开始构建（首次较慢，镜像约数 GB）..."
-  docker build -t "$IMAGE" .
-fi
+echo "[*] data=$DATA_YAML cfg=$CFG weights=$WEIGHTS epochs=$EPOCHS imgsz=$IMGSZ batch=$BATCH name=$NAME gpu=$USE_GPU"
 
-mkdir -p datasets runs
-
-echo "[*] 训练参数： data=$DATA model=$MODEL epochs=$EPOCHS imgsz=$IMGSZ batch=$BATCH gpu=$USE_GPU name=$NAME"
-
-# --ipc=host / --shm-size：PyTorch 多进程 dataloader 需要更大的共享内存，否则会 worker 被杀
-docker run --rm -it $GPU_FLAG --ipc=host $NET_FLAG $PROXY_ARGS \
+docker run --rm -it $GPU_FLAG --ipc=host \
   -v "$(pwd)":/workspace -w /workspace \
   "$IMAGE" bash -lc "
-    yolo settings datasets_dir=/workspace/datasets >/dev/null 2>&1 || true
-    yolo detect train \
-      data='$DATA' model='$MODEL' \
-      epochs=$EPOCHS imgsz=$IMGSZ batch=$BATCH \
-      project=/workspace/runs name='$NAME'
+    cd /workspace/yolov5
+    python train.py \
+      --data /workspace/$DATA_YAML --cfg $CFG --weights $WEIGHTS \
+      --img $IMGSZ --epochs $EPOCHS --batch-size $BATCH \
+      --project /workspace/runs --name $NAME --exist-ok
   "
 
-echo "[✓] 训练完成。最优权重： model_train/runs/$NAME/weights/best.pt"
-echo "    下一步导出 ONNX： WEIGHTS=runs/$NAME/weights/best.pt bash export.sh"
+echo "[✓] 训练完成： runs/$NAME/weights/best.pt"
+echo "    下一步导出： WEIGHTS=runs/$NAME/weights/best.pt bash export.sh"

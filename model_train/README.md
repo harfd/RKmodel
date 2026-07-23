@@ -1,6 +1,12 @@
-# model_train —— YOLOv8 训练容器
+# model_train —— YOLOv5 训练容器
 
-「训练 → 上板」链路的**第一环**：训练 YOLOv8 并导出 ONNX。第二环（ONNX→RKNN）见 [`../model_convert/`](../model_convert/)，整体总览见 [`../README.md`](../README.md)。
+> ⚠️ **本流程已切换为「经典 YOLOv5 + rknn-toolkit2 1.5.2」**（匹配板端 1.5.2 运行时/0.8.2 驱动，并复用项目现有 YOLOv5 后处理）。
+> **权威、完整的使用步骤见 [`../README.md`](../README.md)**。本文档下方的 YOLOv8 内容是旧版，仅供参考。
+> 实际命令：`git clone airockchip/yolov5` → `bash prepare_dataset.sh` → `bash train.sh` → `bash export.sh`（`--rknpu`）。
+
+---
+
+「训练 → 上板」链路的**第一环**（旧 YOLOv8 说明，保留备查）：第二环（ONNX→RKNN）见 [`../model_convert/`](../model_convert/)，整体总览见 [`../README.md`](../README.md)。
 
 基于 Ultralytics 官方镜像（内置 CUDA + PyTorch + ultralytics），产物持久化到本目录。
 

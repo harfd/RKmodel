@@ -1,170 +1,138 @@
-# RKmodel —— YOLOv8 训练 → RKNN 转换 → 上板 全流程
+# RKmodel —— 经典 YOLOv5 训练 → RKNN(1.5.2) 转换 → 上板 全流程
 
-用 Docker 把「训练自己的 YOLOv8 模型」到「生成 RK3588 能跑的 `.rknn`」这条链路脚本化，分两个互相隔离的容器：
+用 Docker 把「训练自己的 YOLOv5 模型」到「生成 RK3588 能跑的 `.rknn`」脚本化，分两个隔离的容器。
 
-| 阶段 | 目录 | 干什么 | 依赖 |
+> **为什么是经典 YOLOv5 + 1.5.2（不是 YOLOv8 + 2.3.2）？**
+> - 板端运行时是 **librknnrt 1.5.2**、NPU 驱动 **0.8.2**（不动板子，保证原有 person/helmet/callplay 模型继续能用）→ PC 转换工具最高只能 **1.5.2**。
+> - 项目现有后处理是 **经典 anchor 版 YOLOv5**（`postprocess.cpp` 里有 anchor 表）→ 训经典 YOLOv5 **能直接复用这套 C++ 后处理**，几乎不用改板端代码。
+> - ⚠️ 用的是 **airockchip/yolov5**（经典 anchor 版），**不是** ultralytics 包里的 `yolov5nu`（那是 anchor-free 的 YOLOv5u，和现有后处理不匹配）。
+
+| 阶段 | 目录 | 干什么 | 工具 |
 |---|---|---|---|
-| ① 训练 | [`model_train/`](model_train/) | 训练 YOLOv8 + 导出 ONNX | 新版 PyTorch/CUDA（ultralytics 官方镜像） |
-| ② 转换 | [`model_convert/`](model_convert/) | ONNX → RKNN（int8 量化） | rknn-toolkit2（旧 numpy/onnx） |
-
-> 为什么分两个容器：训练依赖和 rknn-toolkit2 的依赖版本互相打架，隔离开最省心。
+| ① 训练+导出 | `model_train/` | 经典 YOLOv5 训练 → `--rknpu` 导 RKNN 友好 ONNX | airockchip/yolov5 |
+| ② 转换 | `model_convert/` | ONNX → RKNN（i8 量化） | rknn-toolkit2 **1.5.2** |
 
 ## 目录结构
 
 ```
 RKmodel/
-├── README.md                # 本文件(总览)
-├── model_train/             # 阶段① 训练 + 导出 ONNX
-│   ├── Dockerfile           #   训练镜像(基于 ultralytics 官方镜像)
-│   ├── train.sh             #   启动训练
-│   ├── export.sh            #   导出标准 ONNX
-│   ├── .gitignore
-│   ├── datasets/            #   (运行时) 数据集自动下载到这里
-│   └── runs/                #   (运行时) 训练输出：权重/曲线/结果图
-└── model_convert/           # 阶段② ONNX → RKNN
-    ├── Dockerfile           #   rknn-toolkit2 镜像
-    ├── convert.py           #   转换脚本
-    ├── convert.sh           #   启动转换
-    ├── dataset.txt          #   量化校准图清单(模板)
-    ├── README.md            #   转换阶段详细说明
-    └── .gitignore
+├── README.md
+├── model_train/
+│   ├── Dockerfile              # 训练镜像(ultralytics 基础镜像 + yolov5 依赖)
+│   ├── prepare_dataset.sh      # 下数据集 + 生成 yolov5 格式 yaml
+│   ├── train.sh                # 训练经典 YOLOv5
+│   ├── export.sh               # 导出 RKNN 友好 ONNX(--rknpu)
+│   ├── yolov5/                 # (需自行 git clone airockchip/yolov5)
+│   ├── datasets/  runs/        # (运行时生成)
+├── model_convert/
+│   ├── Dockerfile              # rknn-toolkit2 1.5.2(从本地 wheel 装)
+│   ├── wheels/                 # (需自行放 1.5.2 的 whl + requirements)
+│   ├── convert.py  convert.sh  dataset.txt  model/  calib/
 ```
 
 ## 端到端流程
 
 ```
-[阶段①] model_train                         [阶段②] model_convert            [板端]
- 数据集 --train.sh--> best.pt                  best.onnx --convert.sh-->        RK3588
-                       │                        (rknn-toolkit2 量化)            │
-                       ├─ export.sh ─> 标准ONNX(仅PC验证)                        │
-                       └─ airockchip fork ─> RKNN友好ONNX ──拷入 model_convert──┘
-                                                            └─> best.rknn --scp--> 换后处理跑起来
+[① model_train]                                  [② model_convert]        [板端 RK3588]
+ clone airockchip/yolov5
+ prepare_dataset.sh ─► 数据集 + _yolov5_data.yaml
+ train.sh ─► best.pt
+ export.sh(--rknpu) ─► best.onnx + RK_anchors.txt ──► convert.sh(i8, 1.5.2) ─► best.rknn ──► scp
+                                                                                    │
+                                            复用现有 YOLOv5 后处理，只改 class_num/anchors/标签
 ```
 
 ---
 
-## 前置条件（两个阶段通用）
+## 前置条件
 
-| 项 | 要求 |
-|---|---|
-| WSL2 | 必须能正常启动（`HypervisorPresent` 为 True）。起不来先修虚拟化（`bcdedit /set hypervisorlaunchtype auto` + 启用"虚拟机平台"+重启） |
-| Docker Desktop | 开启 WSL2 backend、启用 Ubuntu 集成 |
-| 运行位置 | 在 **WSL2 的 Ubuntu 终端**里跑，**且把 RKmodel 放到 WSL2 内部**（如 `~/RKmodel`），别在 `/mnt/d/...` 下跑——跨盘 IO 极慢 |
-| GPU（阶段①推荐） | Windows 装好 NVIDIA 驱动才能 `--gpus all`；无独显用 `USE_GPU=0` 走 CPU（很慢，仅试链路）。阶段②纯 CPU，无需 GPU |
-
-验证 GPU 直通（可选）：
-```bash
-docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
-```
+- Docker（你这台是 Docker Desktop + WSL 集成，加速/代理在 Docker Desktop 的 Settings 里配）。
+- 训练阶段建议有 NVIDIA GPU（`--gpus all`），无 GPU 用 `USE_GPU=0`（慢）。
+- 联网：训练下预训练权重/数据集、build 拉镜像，都走你在 Docker Desktop 配好的镜像加速/代理。
 
 ---
 
-## 阶段① 训练（`model_train/`）
+## 阶段① 训练 + 导出（`model_train/`）
 
 ```bash
 cd RKmodel/model_train
 
-# 冒烟测试：8 张图跑 5 轮，几十秒，只验证链路通不通
-DATA=coco8.yaml EPOCHS=5 bash train.sh
+# 0) 拿经典 anchor 版 YOLOv5(RK 优化 fork)  —— 只需一次
+git clone https://github.com/airockchip/yolov5.git
 
-# 第一次完整训练：非洲野生动物(4 类, ~1500 图)，GPU 上几十分钟
-bash train.sh
+# 1) 下数据集 + 生成 yolov5 格式 yaml(默认 construction-ppe)
+bash prepare_dataset.sh
+#    生成 _yolov5_data.yaml，打印出来核对一下 names 顺序(=类别索引)
 
-# 训练完导出标准 ONNX（仅用于 PC 上验证模型，不直接上板）
-bash export.sh
+# 2) 训练(经典 YOLOv5，多路实时选 yolov5n/s)
+CFG=yolov5s.yaml WEIGHTS=yolov5s.pt EPOCHS=150 NAME=ppe bash train.sh
+#    结果：runs/ppe/weights/best.pt
+
+# 3) 导出 RKNN 友好 ONNX(--rknpu，会生成 RK_anchors.txt)
+WEIGHTS=runs/ppe/weights/best.pt bash export.sh
+#    结果：runs/ppe/weights/best.onnx + yolov5/RK_anchors.txt
 ```
-首次运行自动 `docker build`（镜像约数 GB）。最优权重在 `model_train/runs/exp/weights/best.pt`。
 
-### 参数（环境变量覆盖 train.sh）
+参数（train.sh 环境变量）：`CFG`(yolov5n/s/m.yaml)、`WEIGHTS`、`EPOCHS`、`IMGSZ`(保持 640)、`BATCH`、`NAME`、`USE_GPU`。
 
-| 变量 | 默认 | 含义 |
-|---|---|---|
-| `DATA` | `african-wildlife.yaml` | 数据集 yaml，内置的自动下载，也可指自己的 |
-| `MODEL` | `yolov8n.pt` | 基础权重 n/s/m/l/x，多路实时选 **n 或 s** |
-| `EPOCHS` | `100` | 训练轮数 |
-| `IMGSZ` | `640` | 输入尺寸，**保持 640**（和板端项目一致） |
-| `BATCH` | `16` | 批大小，显存小改小或设 `-1` 自动 |
-| `NAME` | `exp` | 输出子目录 `runs/<NAME>` |
-| `USE_GPU` | `1` | `1`=GPU，`0`=CPU |
-
-### 推荐数据集（都自动下载）
-
-| yaml | 规模/类别 | 用途 |
-|---|---|---|
-| `coco8.yaml` | 8 图 / 80 类 | 冒烟测试链路 |
-| `african-wildlife.yaml` | ~1500 图 / 4 类 | **第一次完整训练**，易收敛 |
-| `construction-ppe.yaml` | ~1400 图 / 11 类(含 helmet/no_helmet/Person/vest) | **贴业务**：一个模型判断"戴没戴帽"，可替换现项目三模型+融合 |
-| `VOC.yaml` | ~2 万图 / 20 类 | 中等规模基准 |
+> **想要更好的 i8 精度** → 用 ReLU 激活训练（你项目原来的 `*_relu` 模型就是这么来的）。airockchip/yolov5 支持把激活换成 ReLU（见其 `README_rkopt.md`），按它的说明改模型 cfg 的 activation 即可。默认 SiLU 也能转能跑，只是量化掉点略多。
 
 ---
 
-## 阶段② 转换（`model_convert/`）
+## 阶段② 转换（`model_convert/`，rknn-toolkit2 1.5.2）
 
-细节见 [`model_convert/README.md`](model_convert/README.md)，要点：
-
+### 先准备 1.5.2 的 wheel（一次）
+1.5.2 不在 PyPI，从仓库拿：
 ```bash
-cd RKmodel/model_convert
-mkdir -p model calib
-
-# 1) 放入"RKNN 友好 ONNX"(用 airockchip fork 导，见下方) 到 model/
-# 2) 先不量化试通链路
-ONNX=model/best.onnx DTYPE=fp bash convert.sh
-# 3) 放校准图 + 填 dataset.txt 后，正式 int8 量化
-ONNX=model/best.onnx DTYPE=i8 bash convert.sh
+cd RKmodel/model_convert && mkdir -p wheels
+# 挂代理/镜像 clone，checkout v1.5.2，把 wheel 和 requirements 拷进 wheels/
+git clone https://github.com/rockchip-linux/rknn-toolkit2.git /tmp/rk152
+cd /tmp/rk152 && git checkout tags/v1.5.2 -b v1.5.2
+cp packages/rknn_toolkit2-1.5.2*cp310*.whl  packages/requirements_cp310-1.5.2.txt  <RKmodel路径>/model_convert/wheels/
 ```
-产物 `model/best.rknn`。
+> Ubuntu22.04 容器是 python3.10 → 用 **cp310** 的 whl。若 1.5.2 只提供 cp38，把 Dockerfile 基础镜像换成 `ubuntu:20.04` 并改用 cp38 的 whl+requirements。
 
-**⚠️ 输入 ONNX 必须用 airockchip fork 导**（标准 ONNX 上板量化不好且后处理不匹配）。在训练镜像里临时装 fork 导一次：
+### 转换（i8 量化 + 校准图）
 ```bash
-cd RKmodel/model_train
-docker run --rm -it -v "$(pwd)":/workspace -w /workspace yolo-train:latest bash -lc "
-  pip install -q 'git+https://github.com/airockchip/ultralytics_yolov8.git' &&
-  yolo export model=runs/exp/weights/best.pt format=onnx imgsz=640
-"
-# 得到的 onnx 拷到 ../model_convert/model/
-```
+cd RKmodel/model_convert && mkdir -p model calib
+cp ~/RKmodel/model_train/runs/ppe/weights/best.onnx model/
 
-**⚠️ rknn-toolkit2 版本要与板上 `librknnrt.so` 一致**：`RKNN_TOOLKIT_VERSION=2.3.2 bash convert.sh`。
+# 从训练集挑 ~200 张当校准图
+cp $(ls ~/RKmodel/model_train/datasets/construction-ppe/images/train/*.jpg | shuf | head -200) calib/
+ls calib/*.jpg > dataset.txt
+
+ONNX=model/best.onnx DTYPE=i8 bash convert.sh    # 首次自动 build 1.5.2 镜像
+#   产物：model/best.rknn
+```
+（先 `DTYPE=fp` 跑一遍验证转换本身没问题，再 `i8` 量化。）
 
 ---
 
-## 完整跑一遍（从零到 .rknn）
+## 阶段③ 上板（复用现有后处理，改动很小）
 
 ```bash
-# 阶段①：训练 + 导出 RKNN 友好 ONNX
-cd RKmodel/model_train
-DATA=construction-ppe.yaml MODEL=yolov8n.pt EPOCHS=150 NAME=ppe bash train.sh
-docker run --rm -it -v "$(pwd)":/workspace -w /workspace yolo-train:latest bash -lc "
-  pip install -q 'git+https://github.com/airockchip/ultralytics_yolov8.git' &&
-  yolo export model=runs/ppe/weights/best.pt format=onnx imgsz=640"
-
-# 阶段②：转 RKNN
-cd ../model_convert && mkdir -p model calib
-cp ../model_train/runs/ppe/weights/best.onnx model/
-# (往 calib/ 放校准图并填好 dataset.txt)
-RKNN_TOOLKIT_VERSION=<与板端一致> DTYPE=i8 bash convert.sh
-
-# 上板
 scp model/best.rknn cat@<板子IP>:~/.../project1/.../model/RK3588/
 ```
-
-上板后别忘了：**换 YOLOv8 后处理**（现项目是 YOLOv5 anchor 版，不通用，从 `rknn_model_zoo/examples/yolov8` 搬 C++ 后处理）、调 `rknn_lite` 的 `class_num`、更新标签文件。
+板端只需（**不用重写后处理**，因为是经典 YOLOv5）：
+1. 换模型文件路径 / 文件名；
+2. **改 `class_num`** 为你的类别数（construction-ppe 是 11，或你精简后的数量）；
+3. **核对 anchor**：把 `postprocess.cpp` 里的 anchor 表和导出生成的 `RK_anchors.txt` 对上（若你没改 anchor、用默认，一般就是一致的）；
+4. 更新标签文件（类别名，顺序=`_yolov5_data.yaml` 里的 names）；
+5. 若用单个多类模型替代原三模型，可相应精简 `rknn_infer`/融合逻辑。
 
 ---
 
-## 跨阶段要牢记的坑
+## 跨阶段要点
 
-1. **WSL2 必须正常** + **RKmodel 放 WSL 内部**（不放 `/mnt/d`），否则训练极慢。
-2. **CRLF 行尾**：脚本报 `bad interpreter` 就 `sed -i 's/\r$//' */*.sh`。
-3. **版本对齐**：rknn-toolkit2 版本 == 板上 `librknnrt.so` 版本。
-4. **导出要用 fork**：上板的 ONNX 用 airockchip fork，不是标准导出。
-5. **后处理要换**：YOLOv8 anchor-free ≠ 现项目 YOLOv5 anchor。
-6. **许可证**：Ultralytics YOLOv8 是 AGPL-3.0，商用需注意授权。
+1. **版本铁律**：PC 转换 = **1.5.2**，板端运行时 = **1.5.2**，两边必须一致。
+2. **经典 YOLOv5 ≠ YOLOv5u**：一定用 `airockchip/yolov5`，别用 ultralytics 包的 `yolov5nu`。
+3. **anchor 要对上**：导出的 `RK_anchors.txt` vs 板端 `postprocess.cpp` 的 anchor。
+4. **老模型安全**：全程不动板子的运行时/驱动，person/helmet/callplay 照常工作。
+5. **脚本行尾**：报 `bad interpreter` 就 `sed -i 's/\r$//' */*.sh`。
 
 ## 一句话流程
 
 ```text
-model_train:  数据集 → train.sh → best.pt →(airockchip fork)→ RKNN友好 ONNX
-model_convert: ONNX →(对齐版本 + 量化)→ best.rknn
-板端:          scp → 换 YOLOv8 后处理 → 跑起来
+clone airockchip/yolov5 → prepare_dataset.sh → train.sh → export.sh(--rknpu)
+  → model_convert(1.5.2, i8) → best.rknn → scp → 改 class_num/anchors/标签 → 跑起来
 ```

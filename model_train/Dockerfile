@@ -3,8 +3,9 @@
 # 说明见同目录 README.md
 FROM ultralytics/ultralytics:latest
 
-# 导出 ONNX 所需组件（基础镜像可能已含，冗余安装无害）
-RUN pip install --no-cache-dir onnx onnxslim onnxruntime
+# 导出 ONNX 所需组件 + 经典 YOLOv5(airockchip/yolov5) 训练需要的额外依赖
+# 基础镜像已含 torch/opencv/pandas 等；这里补 yolov5 需要但基础镜像可能缺的
+RUN pip install --no-cache-dir onnx onnxslim onnxruntime thop gitpython
 
 # 训练工作区：数据集 / 基础权重 / 训练输出 都落在挂载进来的 /workspace，持久化到宿主机
 WORKDIR /workspace

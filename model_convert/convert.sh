@@ -8,8 +8,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 # ---------- 可配置参数 ----------
-IMAGE="${IMAGE:-rknn-convert:latest}"
-RKNN_TOOLKIT_VERSION="${RKNN_TOOLKIT_VERSION:-2.3.2}"   # 必须和板上 librknnrt.so 版本一致
+IMAGE="${IMAGE:-rknn-convert-152:latest}"               # 1.5.2 版镜像(和板端 1.5.2 运行时对齐)
 ONNX="${ONNX:-model/best.onnx}"                          # 输入 ONNX（相对本目录）
 PLATFORM="${PLATFORM:-rk3588}"
 DTYPE="${DTYPE:-i8}"                                     # i8/u8=量化, fp=不量化
@@ -19,8 +18,8 @@ OUTPUT="${OUTPUT:-}"                                     # 输出路径，空则
 
 # 镜像不存在则构建
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "[*] 构建镜像 $IMAGE (rknn-toolkit2 $RKNN_TOOLKIT_VERSION)..."
-  docker build --build-arg RKNN_TOOLKIT_VERSION="$RKNN_TOOLKIT_VERSION" -t "$IMAGE" .
+  echo "[*] 构建镜像 $IMAGE (rknn-toolkit2 1.5.2，需先放好 wheels/，见 README)..."
+  docker build -t "$IMAGE" .
 fi
 
 [ -f "$ONNX" ] || { echo "[!] 找不到 ONNX: $ONNX（先在训练容器导出，见 README）"; exit 1; }
