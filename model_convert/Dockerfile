@@ -13,8 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libsm6 libgl1-mesa-glx libprotobuf-dev gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# rknn-toolkit2 依赖旧版 onnx（onnx 1.16+ 删了 onnx.mapping），显式固定到兼容版本
-RUN pip3 install --no-cache-dir "rknn-toolkit2==${RKNN_TOOLKIT_VERSION}" "onnx==1.14.1"
+# rknn-toolkit2 2.3.2 要求 onnx>=1.16.1，但默认会拉到 onnx 1.18+（删了 onnx.mapping 会报错）。
+# 固定到 1.16.1：既满足其依赖，又仍保留 onnx.mapping。
+RUN pip3 install --no-cache-dir "rknn-toolkit2==${RKNN_TOOLKIT_VERSION}" "onnx==1.16.1"
 
 WORKDIR /work
 CMD ["bash"]
