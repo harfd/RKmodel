@@ -15,6 +15,7 @@ WEIGHTS="${WEIGHTS:-runs/ppe/weights/best.pt}"   # 相对本目录
 
 docker run --rm -it -v "$(pwd)":/workspace -w /workspace "$IMAGE" bash -lc "
   cd /workspace/yolov5
+  pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple tqdm seaborn thop gitpython psutil pyyaml requests matplotlib pandas 2>/dev/null || true
   python export.py --rknpu --weight /workspace/$WEIGHTS
 "
 

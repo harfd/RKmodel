@@ -34,6 +34,8 @@ docker run --rm -it $GPU_FLAG --ipc=host \
   -v "$(pwd)":/workspace -w /workspace \
   "$IMAGE" bash -lc "
     cd /workspace/yolov5
+    # 补 yolov5 需要但基础镜像可能缺的轻量依赖(不动已装的 CUDA torch)
+    pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple tqdm seaborn thop gitpython psutil pyyaml requests matplotlib pandas 2>/dev/null || true
     python train.py \
       --data /workspace/$DATA_YAML --cfg $CFG --weights $WEIGHTS \
       --img $IMGSZ --epochs $EPOCHS --batch-size $BATCH \
