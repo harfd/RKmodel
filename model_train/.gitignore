@@ -1,7 +1,10 @@
-# 训练产物与大文件不入库
+# 训练产物与大文件、外部仓库、运行时生成物 —— 不入库
 datasets/
 runs/
 .ultralytics/
+yolov5/                 # git clone 的 airockchip/yolov5(自带 .git，各环境各自 clone，勿提交)
+_patch/                 # 运行时生成的 sitecustomize 补丁
+_yolov5_data.yaml       # prepare_dataset.sh 生成的
 *.pt
 *.onnx
 *.rknn

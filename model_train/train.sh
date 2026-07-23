@@ -40,6 +40,23 @@ try:
     torch.load = _load
 except Exception:
     pass
+try:
+    # 补回 NumPy 2.0 移除的名字（旧 yolov5 会用到），一次性覆盖，避免逐个报错
+    import numpy as np
+    for _o, _n in (('trapz','trapezoid'),('in1d','isin'),('row_stack','vstack'),
+                   ('product','prod'),('cumproduct','cumprod'),('sometrue','any'),
+                   ('alltrue','all'),('round_','round'),
+                   ('float_','float64'),('complex_','complex128'),('unicode_','str_'),
+                   ('string_','bytes_'),('int0','intp'),('uint0','uintp'),
+                   ('longfloat','longdouble'),('singlecomplex','complex64'),('cfloat','complex128')):
+        if not hasattr(np, _o) and hasattr(np, _n):
+            setattr(np, _o, getattr(np, _n))
+    for _o, _v in (('NaN',np.nan),('NAN',np.nan),('Inf',np.inf),('Infinity',np.inf),
+                   ('infty',np.inf),('PINF',np.inf),('NINF',-np.inf)):
+        if not hasattr(np, _o):
+            setattr(np, _o, _v)
+except Exception:
+    pass
 PYEOF
 
 echo "[*] data=$DATA_YAML cfg=$CFG weights=$WEIGHTS epochs=$EPOCHS imgsz=$IMGSZ batch=$BATCH name=$NAME gpu=$USE_GPU"
