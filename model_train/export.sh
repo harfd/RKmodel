@@ -15,6 +15,7 @@ WEIGHTS="${WEIGHTS:-runs/ppe/weights/best.pt}"   # 相对本目录
 
 docker run --rm -it -v "$(pwd)":/workspace -w /workspace "$IMAGE" bash -lc "
   cd /workspace/yolov5
+  git config --global --add safe.directory '*'
   grep -viE '^[[:space:]]*(torch|torchvision)([[:space:]]|>|=|<|\$)' requirements.txt > /tmp/req.txt 2>/dev/null || cp requirements.txt /tmp/req.txt
   pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt 2>/dev/null || true
   python export.py --rknpu --weight /workspace/$WEIGHTS

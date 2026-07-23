@@ -34,6 +34,8 @@ docker run --rm -it $GPU_FLAG --ipc=host \
   -v "$(pwd)":/workspace -w /workspace \
   "$IMAGE" bash -lc "
     cd /workspace/yolov5
+    # 挂载目录属主 UID 与容器不同，git 会报 dubious ownership，放行一下
+    git config --global --add safe.directory '*'
     # 一次性装齐 yolov5 依赖，但排除 torch/torchvision(避免动掉 CUDA torch；yolov5 的 pin 都是 >= 不会降级)
     grep -viE '^[[:space:]]*(torch|torchvision)([[:space:]]|>|=|<|\$)' requirements.txt > /tmp/req.txt 2>/dev/null || cp requirements.txt /tmp/req.txt
     pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt 2>/dev/null || true
