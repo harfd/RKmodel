@@ -5,8 +5,8 @@
 #   DATA=construction-ppe.yaml EPOCHS=150 bash train.sh
 #   DATA=coco8.yaml EPOCHS=5 bash train.sh          # 冒烟测试链路
 #   USE_GPU=0 bash train.sh                         # 无 NVIDIA GPU 时用 CPU(很慢)
-#   PROXY=http://127.0.0.1:5782 bash train.sh       # 挂宿主机代理(默认已挂 5782，下数据集用)
-#   PROXY= bash train.sh                            # 不挂代理
+#   (Docker Desktop 请在 Settings→Resources→Proxies 里配代理，train.sh 不用挂)
+#   PROXY=http://127.0.0.1:5782 bash train.sh       # 仅"原生 Docker"想给容器挂代理时用
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -19,8 +19,9 @@ IMGSZ="${IMGSZ:-640}"
 BATCH="${BATCH:-16}"                    # 显存小可设小，或设 -1 让其自动
 NAME="${NAME:-exp}"                     # 输出子目录：runs/<NAME>
 USE_GPU="${USE_GPU:-1}"                 # 1=用 GPU，0=CPU
-# 宿主机代理(下数据集/依赖走境外时用)。默认挂 5782；置空 PROXY= 则不挂；SOCKS 用 socks5://127.0.0.1:5782
-PROXY="${PROXY:-http://127.0.0.1:5782}"
+# 代理：默认不挂(Docker Desktop 在 Settings→Resources→Proxies 里全局配即可)。
+# 仅原生 Docker 想给容器挂代理才设：PROXY=http://127.0.0.1:5782（SOCKS 用 socks5://）
+PROXY="${PROXY-}"
 # -----------------------------------------------
 
 GPU_FLAG=""

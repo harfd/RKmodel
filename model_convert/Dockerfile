@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libsm6 libgl1-mesa-glx libprotobuf-dev gcc \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir "rknn-toolkit2==${RKNN_TOOLKIT_VERSION}"
+# rknn-toolkit2 依赖旧版 onnx（onnx 1.16+ 删了 onnx.mapping），显式固定到兼容版本
+RUN pip3 install --no-cache-dir "rknn-toolkit2==${RKNN_TOOLKIT_VERSION}" "onnx==1.14.1"
 
 WORKDIR /work
 CMD ["bash"]
