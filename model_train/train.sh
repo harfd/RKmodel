@@ -34,8 +34,9 @@ docker run --rm -it $GPU_FLAG --ipc=host \
   -v "$(pwd)":/workspace -w /workspace \
   "$IMAGE" bash -lc "
     cd /workspace/yolov5
-    # 补 yolov5 需要但基础镜像可能缺的轻量依赖(不动已装的 CUDA torch)
-    pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple tqdm seaborn thop gitpython psutil pyyaml requests matplotlib pandas 2>/dev/null || true
+    # 一次性装齐 yolov5 依赖，但排除 torch/torchvision(避免动掉 CUDA torch；yolov5 的 pin 都是 >= 不会降级)
+    grep -viE '^[[:space:]]*(torch|torchvision)([[:space:]]|>|=|<|\$)' requirements.txt > /tmp/req.txt 2>/dev/null || cp requirements.txt /tmp/req.txt
+    pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt 2>/dev/null || true
     python train.py \
       --data /workspace/$DATA_YAML --cfg $CFG --weights $WEIGHTS \
       --img $IMGSZ --epochs $EPOCHS --batch-size $BATCH \
