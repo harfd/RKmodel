@@ -1,5 +1,6 @@
-# 大文件/中间产物不入库
+# 大文件/中间产物/自行获取的 wheel —— 不入库
 *.onnx
 *.rknn
 model/
 calib/
+wheels/          # rknn-toolkit2 1.5.2 的 whl+requirements，各环境自行放置(见 README)

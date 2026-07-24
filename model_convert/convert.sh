@@ -3,7 +3,7 @@
 # 用法示例：
 #   bash convert.sh                                        # 默认转 model/best.onnx 为 i8 量化 rknn
 #   ONNX=model/yolov8n.onnx DTYPE=fp bash convert.sh       # 不量化，先验证转换流程
-#   RKNN_TOOLKIT_VERSION=2.3.0 bash convert.sh             # 指定与板端匹配的版本重建镜像
+#   RKNN_WHL_URL=<镜像whl地址> bash convert.sh             # github 连不上时用镜像地址下 wheel
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -16,10 +16,13 @@ DATASET="${DATASET:-dataset.txt}"                        # 量化校准图清单
 OUTPUT="${OUTPUT:-}"                                     # 输出路径，空则同名 .rknn
 # --------------------------------
 
-# 镜像不存在则构建
+# 镜像不存在则构建（构建时会自动下载 1.5.2 wheel；wheels/ 里放了本地 whl 则优先用本地）
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-  echo "[*] 构建镜像 $IMAGE (rknn-toolkit2 1.5.2，需先放好 wheels/，见 README)..."
-  docker build -t "$IMAGE" .
+  echo "[*] 构建镜像 $IMAGE (rknn-toolkit2 1.5.2)..."
+  mkdir -p wheels model
+  BUILD_ARGS=""
+  [ -n "${RKNN_WHL_URL:-}" ] && BUILD_ARGS="--build-arg RKNN_WHL_URL=$RKNN_WHL_URL"
+  docker build $BUILD_ARGS -t "$IMAGE" .
 fi
 
 [ -f "$ONNX" ] || { echo "[!] 找不到 ONNX: $ONNX（先在训练容器导出，见 README）"; exit 1; }
