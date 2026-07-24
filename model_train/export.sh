@@ -9,6 +9,7 @@ cd "$(dirname "$0")"
 
 IMAGE="${IMAGE:-yolo-train:latest}"
 WEIGHTS="${WEIGHTS:-runs/ppe/weights/best.pt}"   # 相对本目录
+OPSET="${OPSET:-12}"                             # rknn-toolkit2 1.5.2 只支持 ONNX opset <= 12
 
 [ -d yolov5 ] || { echo "[!] 缺 yolov5/ 目录"; exit 1; }
 [ -f "$WEIGHTS" ] || { echo "[!] 找不到权重： $WEIGHTS（先训练，或用 WEIGHTS=... 指定）"; exit 1; }
@@ -23,6 +24,16 @@ try:
         k.setdefault('weights_only', False)
         return _orig(*a, **k)
     torch.load = _load
+
+    # PyTorch 2.9+ 默认使用 Dynamo ONNX 导出器。它会先生成 opset 18，
+    # 再尝试降级到 12；Resize 等算子降级失败时仍可能留下 opset 18 文件。
+    # 强制使用旧导出器，让 opset_version=12 在导出阶段直接生效。
+    _orig_onnx_export = torch.onnx.export
+    @functools.wraps(_orig_onnx_export)
+    def _onnx_export(*a, **k):
+        k['dynamo'] = False
+        return _orig_onnx_export(*a, **k)
+    torch.onnx.export = _onnx_export
 except Exception:
     pass
 try:
@@ -45,12 +56,14 @@ except Exception:
 PYEOF
 
 docker run --rm -it -v "$(pwd)":/workspace -w /workspace "$IMAGE" bash -lc "
+  set -e
   cd /workspace/yolov5
   git config --global --add safe.directory '*'
   export PYTHONPATH=/workspace/_patch:\${PYTHONPATH:-}
   grep -viE '^[[:space:]]*(torch|torchvision)([[:space:]]|>|=|<|\$)' requirements.txt > /tmp/req.txt 2>/dev/null || cp requirements.txt /tmp/req.txt
   pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt onnx onnxscript 2>/dev/null || true
-  python export.py --rknpu --weight /workspace/$WEIGHTS --opset 12
+  python export.py --rknpu --weights /workspace/$WEIGHTS --opset $OPSET
+  python -c 'import onnx; p=\"/workspace/${WEIGHTS%.pt}.onnx\"; m=onnx.load(p); v=[x.version for x in m.opset_import if x.domain in (\"\", \"ai.onnx\")]; print(f\"[*] 导出 ONNX opset: {v}\"); assert v and max(v) <= 12, f\"导出的 ONNX opset {v} 超过 RKNN Toolkit 1.5.2 支持上限 12\"'
 "
 
 ONNX="${WEIGHTS%.pt}.onnx"
