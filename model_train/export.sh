@@ -50,7 +50,7 @@ docker run --rm -it -v "$(pwd)":/workspace -w /workspace "$IMAGE" bash -lc "
   export PYTHONPATH=/workspace/_patch:\${PYTHONPATH:-}
   grep -viE '^[[:space:]]*(torch|torchvision)([[:space:]]|>|=|<|\$)' requirements.txt > /tmp/req.txt 2>/dev/null || cp requirements.txt /tmp/req.txt
   pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt onnx onnxscript 2>/dev/null || true
-  python export.py --rknpu --weight /workspace/$WEIGHTS
+  python export.py --rknpu --weight /workspace/$WEIGHTS --opset 12
 "
 
 ONNX="${WEIGHTS%.pt}.onnx"
