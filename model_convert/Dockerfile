@@ -5,7 +5,9 @@ FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ARG RKNN_WHL_URL=https://raw.githubusercontent.com/rockchip-linux/rknn-toolkit2/v1.5.2/packages/rknn_toolkit2-1.5.2+b642f30c-cp310-cp310-linux_x86_64.whl
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 换成清华 apt 源（官方 archive.ubuntu.com 在国内慢/易 502）
+RUN sed -i 's@http://archive.ubuntu.com@http://mirrors.tuna.tsinghua.edu.cn@g; s@http://security.ubuntu.com@http://mirrors.tuna.tsinghua.edu.cn@g' /etc/apt/sources.list \
+    && apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-dev python3-pip curl ca-certificates \
         libxslt1-dev zlib1g zlib1g-dev libglib2.0-0 \
         libsm6 libgl1-mesa-glx libprotobuf-dev gcc \
