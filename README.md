@@ -26,7 +26,8 @@ RKmodel/
 │   ├── datasets/  runs/        # (运行时生成)
 ├── model_convert/
 │   ├── Dockerfile              # rknn-toolkit2 1.5.2(从本地 wheel 装)
-│   ├── wheels/                 # (需自行放 1.5.2 的 whl + requirements)
+│   ├── prepare_calibration.sh  # 随机选取校准图 + 生成 dataset.txt
+│   ├── wheels/                 # 可选：本地放置 1.5.2 的 cp310 wheel
 │   ├── convert.py  convert.sh  dataset.txt  model/  calib/
 ```
 
@@ -37,7 +38,7 @@ RKmodel/
  clone airockchip/yolov5
  prepare_dataset.sh ─► 数据集 + _yolov5_data.yaml
  train.sh ─► best.pt
- export.sh(--rknpu) ─► best.onnx + RK_anchors.txt ──► convert.sh(i8, 1.5.2) ─► best.rknn ──► scp
+ export.sh(--rknpu) ─► best.onnx + RK_anchors.txt ──► prepare_calibration.sh + convert.sh ─► best-int8.rknn ─► scp
                                                                                     │
                                             复用现有 YOLOv5 后处理，只改 class_num/anchors/标签
 ```
@@ -82,36 +83,61 @@ WEIGHTS=runs/ppe/weights/best.pt bash export.sh
 ## 阶段② 转换（`model_convert/`，rknn-toolkit2 1.5.2）
 
 ### 先准备 1.5.2 的 wheel（一次）
-1.5.2 不在 PyPI，从仓库拿：
+Dockerfile 默认会下载官方 cp310 wheel。如果网络不稳定，也可以预先放到本地：
 ```bash
 cd RKmodel/model_convert && mkdir -p wheels
-# 挂代理/镜像 clone，checkout v1.5.2，把 wheel 和 requirements 拷进 wheels/
-git clone https://github.com/rockchip-linux/rknn-toolkit2.git /tmp/rk152
-cd /tmp/rk152 && git checkout tags/v1.5.2 -b v1.5.2
-cp packages/rknn_toolkit2-1.5.2*cp310*.whl  packages/requirements_cp310-1.5.2.txt  <RKmodel路径>/model_convert/wheels/
+wget -O wheels/rknn_toolkit2-1.5.2+b642f30c-cp310-cp310-linux_x86_64.whl \
+  https://raw.githubusercontent.com/rockchip-linux/rknn-toolkit2/v1.5.2/packages/rknn_toolkit2-1.5.2+b642f30c-cp310-cp310-linux_x86_64.whl
 ```
-> Ubuntu22.04 容器是 python3.10 → 用 **cp310** 的 whl。若 1.5.2 只提供 cp38，把 Dockerfile 基础镜像换成 `ubuntu:20.04` 并改用 cp38 的 whl+requirements。
+> Ubuntu 22.04 容器使用 Python 3.10，因此必须保留完整的 **cp310-cp310-linux_x86_64** wheel 文件名。
 
 ### 转换（i8 量化 + 校准图）
 ```bash
-cd RKmodel/model_convert && mkdir -p model calib
+cd ~/RKmodel/model_convert
+mkdir -p model
 cp ~/RKmodel/model_train/runs/ppe/weights/best.onnx model/
 
-# 从训练集挑 ~200 张当校准图
-cp $(ls ~/RKmodel/model_train/datasets/construction-ppe/images/train/*.jpg | shuf | head -200) calib/
-ls calib/*.jpg > dataset.txt
+# 先做非量化模型，验证 ONNX -> RKNN 链路
+ONNX=model/best.onnx DTYPE=fp OUTPUT=model/best-fp.rknn bash convert.sh
 
-ONNX=model/best.onnx DTYPE=i8 bash convert.sh    # 首次自动 build 1.5.2 镜像
-#   产物：model/best.rknn
+# 从 construction-ppe/images/train 随机选 200 张并生成 dataset.txt
+bash prepare_calibration.sh
+
+# 正式量化，显式指定输出名，避免覆盖 FP 模型
+ONNX=model/best.onnx \
+DTYPE=i8 \
+DATASET=dataset.txt \
+OUTPUT=model/best-int8.rknn \
+bash convert.sh
 ```
-（先 `DTYPE=fp` 跑一遍验证转换本身没问题，再 `i8` 量化。）
+
+`prepare_calibration.sh` 默认参数：
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `SOURCE_DIR` | `../model_train/datasets/construction-ppe/images/train` | 原始图片目录 |
+| `COUNT` | `200` | 随机选取数量 |
+| `CALIB_DIR` | `calib/construction-ppe-<COUNT>` | 复制后的校准图目录 |
+| `DATASET` | `dataset.txt` | 生成的相对路径清单 |
+
+自定义示例：
+
+```bash
+SOURCE_DIR=../model_train/datasets/construction-ppe/images/val \
+COUNT=300 \
+CALIB_DIR=calib/construction-ppe-val-300 \
+DATASET=dataset_val_300.txt \
+bash prepare_calibration.sh
+```
+
+校准图片不需要标签。随机抽取后应人工检查，确保覆盖所有实际类别、远近目标、遮挡、白天/夜间、逆光和少量无目标背景；不要使用大量连续重复帧。目标目录非空或清单已有真实路径时，脚本会停止，避免混入上一版校准集。
 
 ---
 
 ## 阶段③ 上板（复用现有后处理，改动很小）
 
 ```bash
-scp model/best.rknn cat@<板子IP>:~/.../project1/.../model/RK3588/
+scp model/best-int8.rknn cat@<板子IP>:~/.../project1/.../model/RK3588/
 ```
 板端只需（**不用重写后处理**，因为是经典 YOLOv5）：
 1. 换模型文件路径 / 文件名；
@@ -134,5 +160,6 @@ scp model/best.rknn cat@<板子IP>:~/.../project1/.../model/RK3588/
 
 ```text
 clone airockchip/yolov5 → prepare_dataset.sh → train.sh → export.sh(--rknpu)
-  → model_convert(1.5.2, i8) → best.rknn → scp → 改 class_num/anchors/标签 → 跑起来
+  → prepare_calibration.sh → model_convert(1.5.2, i8) → best-int8.rknn → scp
+  → 改 class_num/anchors/标签 → 跑起来
 ```

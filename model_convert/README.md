@@ -1,150 +1,264 @@
-# model_convert —— ONNX → RKNN 转换容器
+# model_convert —— ONNX → RKNN 1.5.2 转换与量化
 
-> ⚠️ **已切换为 rknn-toolkit2 1.5.2**（匹配板端 1.5.2 运行时）。1.5.2 不在 PyPI，需从
-> `rockchip-linux/rknn-toolkit2` 的 v1.5.2 拿 whl+requirements 放到本目录 `wheels/` 下再 build（见 [`../README.md`](../README.md) 阶段②）。
-> 下方旧文档中「rknn-toolkit2 2.3.2 / pip 安装」的部分已不适用。
+本目录使用 x86_64 Docker 容器把经典 YOLOv5 的 RKNN 友好 ONNX 转成 RK3588 可加载的 `.rknn`，支持先生成 FP 模型验证链路，再使用代表性校准集生成 INT8 量化模型。
 
----
-
-把 YOLOv5 的 ONNX 转成 RK3588 能跑的 `.rknn`（含 int8 量化），用 **rknn-toolkit2 1.5.2** 独立容器完成。
-这是「训练 → 上板」链路的**第二环**；第一环（训练 + 导出 ONNX）在训练容器 `model_train`（见其 README）。
-
-```
-best.pt --(model_train + airockchip fork)--> RKNN友好ONNX --(本容器 rknn-toolkit2)--> best.rknn --scp--> RK3588
-```
-
-> 为什么单独一个容器：rknn-toolkit2 对 numpy/onnx/protobuf 版本要求很旧，和训练用的新 PyTorch 环境装一起必冲突，所以隔离开。
-
----
-
-## 1. 前置条件
-
-| 项 | 要求 |
-|---|---|
-| 运行环境 | **x86_64** 的 WSL2 Ubuntu（rknn-toolkit2 只支持 x86，不能在 ARM/板子上跑） |
-| Docker | Docker Desktop + WSL2 backend（**这一步不需要 GPU**，纯 CPU 转换） |
-| 版本匹配 | rknn-toolkit2 版本**必须与板上 `librknnrt.so` 一致**，见第 4 节 |
-
----
-
-## 2. 输入的 ONNX 从哪来（关键）
-
-**不要直接用 `model_train` 里 `export.sh` 导出的"标准 ONNX"上板**——那个后处理结构和 RKNN 不匹配。要用 **airockchip 的 ultralytics fork** 导出"RKNN 友好 ONNX"。
-
-在**训练容器**里临时装上 fork 导一次即可（在 `model_train/` 目录）：
-
-```bash
-# 进 model_train 的训练镜像，装 airockchip fork 后导出
-docker run --rm -it -v "$(pwd)":/workspace -w /workspace yolo-train:latest bash -lc "
-  pip install -q 'git+https://github.com/airockchip/ultralytics_yolov8.git' &&
-  yolo export model=runs/exp/weights/best.pt format=onnx imgsz=640
-"
-```
-> fork 的导出会把检测头改成 RKNN 友好结构（去掉不好量化的子图）。具体命令以
-> [airockchip/rknn_model_zoo](https://github.com/airockchip/rknn_model_zoo) 的 `examples/yolov8/README` 为准（不同版本略有差异）。
-
-把得到的 `best.onnx` 拷进本目录的 `model/` 下，即可转换。
-也可以先用官方 `rknn_model_zoo` 里预导出的 `yolov8n.onnx` 试通链路。
-
----
-
-## 3. 目录结构
-
-```
-RKmodel/model_convert/
-├── Dockerfile      # rknn-toolkit2 转换镜像
-├── convert.py      # 转换脚本(load_onnx -> build+量化 -> export_rknn)
-├── convert.sh      # 启动转换
-├── dataset.txt     # 量化校准图清单(模板，需自己填)
-├── README.md       # 本文件
-├── .gitignore
-├── model/          # (自建) 放输入 onnx / 输出 rknn
-└── calib/          # (自建) 放量化校准图片
-```
-
----
-
-## 4. 先对齐版本（否则白转）
-
-在 **RK3588 板子上**查运行时版本：
-```bash
-strings /usr/lib/librknnrt.so | grep -i "librknnrt version"   # 或看你项目里的 .so
-```
-拿到版本号（如 `2.3.2`）后，转换时用同一版本构建镜像：
-```bash
-RKNN_TOOLKIT_VERSION=2.3.2 bash convert.sh
-```
-版本不一致时，生成的 `.rknn` 在板上 `rknn_init` 会失败。
-
----
-
-## 5. 使用步骤
-
-```bash
-# 在 x86 WSL2 Ubuntu 终端，进入本目录
-cd ~/RKmodel/model_convert        # 或你放置的位置
-mkdir -p model calib
-
-# ① 放入 RKNN 友好 ONNX
-cp /path/to/best.onnx model/
-
-# ② 先不量化试通链路（快，验证转换本身没问题）
-ONNX=model/best.onnx DTYPE=fp bash convert.sh
-
-# ③ 正式量化：先往 calib/ 放 100~300 张校准图，编辑 dataset.txt 列出它们
-#    然后：
-ONNX=model/best.onnx DTYPE=i8 bash convert.sh
-```
-产物在 `model/best.rknn`。首次运行会自动 `docker build`。
-
----
-
-## 6. 参数说明（环境变量覆盖）
-
-| 变量 | 默认 | 含义 |
-|---|---|---|
-| `ONNX` | `model/best.onnx` | 输入 ONNX（相对本目录） |
-| `PLATFORM` | `rk3588` | 目标平台 |
-| `DTYPE` | `i8` | `i8`/`u8`=量化，`fp`=不量化 |
-| `DATASET` | `dataset.txt` | 量化校准图清单 |
-| `OUTPUT` | 空 | 输出路径，空则与输入同名 `.rknn` |
-| `RKNN_TOOLKIT_VERSION` | `2.3.2` | rknn-toolkit2 版本，**与板端对齐** |
-
----
-
-## 7. 上板部署
-
-```bash
-# 把 rknn 拷到板子项目的 model 目录
-scp model/best.rknn cat@<板子IP>:~/.../project1/.../model/RK3588/
-```
-然后在 RK3588 上：
-- 换掉模型路径（或文件名）；
-- ⚠️ **后处理也要换**：现项目是 YOLOv5 anchor 版后处理，YOLOv8 是 anchor-free，
-  直接从 `rknn_model_zoo/examples/yolov8` 的 C/C++ 后处理搬过来替换 `post_process`；
-- 调 `rknn_lite` 的 `class_num` 为你的类别数，更新标签文件。
-
----
-
-## 8. 常见问题
-
-| 现象 | 处理 |
-|---|---|
-| 板上 `rknn_init` 失败 / 版本报错 | rknn-toolkit2 版本与 `librknnrt.so` 不一致，见第 4 节重建镜像 |
-| `build failed` 且用了量化 | `dataset.txt` 为空或路径错；先用 `DTYPE=fp` 排除是不是量化问题 |
-| 量化后精度掉很多 | 校准图不够/不具代表性，多放些真实场景图；或先 `fp` 验证是模型本身 OK |
-| `bash: convert.sh: bad interpreter` | CRLF 行尾：`sed -i 's/\r$//' *.sh` |
-| 拉不动 rknn-toolkit2 | pip 源问题，或换 `RKNN_TOOLKIT_VERSION`；也可从 Rockchip 官方 whl 装 |
-| 转换报不支持的算子 | ONNX 不是 airockchip fork 导的（用了标准导出），见第 2 节重导 |
-
----
-
-## 9. 一句话流程
+版本固定关系：
 
 ```text
-(model_train) best.pt --airockchip fork--> best.onnx
-   ↓ 拷进 model/
-(本容器) 对齐版本 → DTYPE=fp 试通 → 放校准图+dataset.txt → DTYPE=i8 量化 → best.rknn
-   ↓ scp 到板子 + 换 YOLOv8 后处理
-RK3588 跑起来
+airockchip/yolov5 导出 ONNX opset 12
+    ↓
+rknn-toolkit2 1.5.2 转换
+    ↓
+RK3588 板端 librknnrt 1.5.2 / NPU 驱动 0.8.2
 ```
+
+不要随意升级 PC 侧 Toolkit。板端运行时保持 1.5.2 时，PC 转换工具也必须保持 1.5.2。
+
+## 1. 目录结构
+
+```text
+RKmodel/model_convert/
+├── Dockerfile                  # rknn-toolkit2 1.5.2 转换镜像
+├── convert.py                  # load_onnx → build → export_rknn
+├── convert.sh                  # 构建镜像并启动转换
+├── prepare_calibration.sh      # 随机选择校准图并生成清单
+├── dataset.txt                 # 默认校准清单；初始为说明模板
+├── wheels/                     # 可选：本地 cp310 wheel
+├── model/                      # 输入 ONNX、输出 RKNN
+└── calib/                      # 脚本生成的校准图片
+```
+
+`model/`、`calib/`、`wheels/` 和模型产物不应提交到 Git。
+
+## 2. 前置条件
+
+- 在 x86_64 WSL2 Ubuntu 中执行；rknn-toolkit2 转换 wheel 不是 ARM wheel。
+- Docker Desktop 已启用 WSL2 集成。
+- 输入模型由 `model_train/export.sh` 导出，必须是 RKNN 友好的经典 YOLOv5 ONNX。
+- ONNX 主域 opset 必须不大于 12。`model_train/export.sh` 已强制 `dynamo=False`、`--opset 12` 并在导出后校验。
+- 板端 `librknnrt.so` 为 1.5.2。
+
+## 3. 准备 RKNN Toolkit wheel
+
+Dockerfile 默认从 Rockchip 仓库下载：
+
+```text
+rknn_toolkit2-1.5.2+b642f30c-cp310-cp310-linux_x86_64.whl
+```
+
+如果构建时网络不稳定，可以手动放入 `wheels/`：
+
+```bash
+cd ~/RKmodel/model_convert
+mkdir -p wheels
+
+wget -O wheels/rknn_toolkit2-1.5.2+b642f30c-cp310-cp310-linux_x86_64.whl \
+  https://raw.githubusercontent.com/rockchip-linux/rknn-toolkit2/v1.5.2/packages/rknn_toolkit2-1.5.2+b642f30c-cp310-cp310-linux_x86_64.whl
+```
+
+必须保留完整 wheel 文件名；不能缩短成 `rknn_toolkit2-1.5.2-cp310.whl`。
+
+## 4. 放入 ONNX
+
+以训练任务 `ppe2` 为例：
+
+```bash
+cd ~/RKmodel/model_convert
+mkdir -p model
+
+cp ../model_train/runs/ppe2/weights/best.onnx model/best.onnx
+```
+
+如需检查 opset：
+
+```bash
+docker run --rm \
+  -v "$(pwd)":/work \
+  -w /work \
+  rknn-convert-152:latest \
+  python3 -c 'import onnx; m=onnx.load("model/best.onnx"); print([(x.domain or "ai.onnx", x.version) for x in m.opset_import])'
+```
+
+主域应显示 opset 12。
+
+## 5. 先生成 FP 模型
+
+第一次转换先关闭量化，用于确认 ONNX、算子和 Toolkit 链路正常：
+
+```bash
+cd ~/RKmodel/model_convert
+
+ONNX=model/best.onnx \
+DTYPE=fp \
+OUTPUT=model/best-fp.rknn \
+bash convert.sh
+```
+
+成功后得到：
+
+```text
+model/best-fp.rknn
+```
+
+## 6. 选择量化校准集
+
+当前 construction-ppe 图片目录为：
+
+```text
+../model_train/datasets/construction-ppe/images/train
+../model_train/datasets/construction-ppe/images/val
+```
+
+默认从训练集随机选取 200 张：
+
+```bash
+cd ~/RKmodel/model_convert
+bash prepare_calibration.sh
+```
+
+默认生成：
+
+```text
+calib/construction-ppe-200/0001.jpg
+calib/construction-ppe-200/0002.jpg
+...
+dataset.txt
+```
+
+`dataset.txt` 使用相对于 `model_convert` 的路径，例如：
+
+```text
+calib/construction-ppe-200/0001.jpg
+calib/construction-ppe-200/0002.jpg
+```
+
+这些相对路径在转换容器中对应 `/work/calib/...`。不要把 `/home/<用户>/...` 绝对路径写入清单，因为 `convert.sh` 只把当前 `model_convert` 目录挂载为 `/work`。
+
+### 脚本参数
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `SOURCE_DIR` | `../model_train/datasets/construction-ppe/images/train` | 校准图来源 |
+| `COUNT` | `200` | 随机选择数量，必须为正整数 |
+| `CALIB_DIR` | `calib/construction-ppe-<COUNT>` | 复制后的图片目录，必须在本目录内 |
+| `DATASET` | `dataset.txt` | 输出清单，必须在本目录内 |
+
+从验证集选择 300 张并使用独立文件名：
+
+```bash
+SOURCE_DIR=../model_train/datasets/construction-ppe/images/val \
+COUNT=300 \
+CALIB_DIR=calib/construction-ppe-val-300 \
+DATASET=dataset_val_300.txt \
+bash prepare_calibration.sh
+```
+
+为了防止旧图片混入新校准集：
+
+- `CALIB_DIR` 已经非空时，脚本会停止。
+- `DATASET` 已经包含真实路径时，脚本会停止。
+- 需要重新抽样时，请换一个 `CALIB_DIR` 和 `DATASET` 名称。
+
+### 校准集选取原则
+
+- 建议先使用 150～300 张真实部署场景图片。
+- 覆盖全部类别、远近目标、大小目标、遮挡、不同背景和摄像头角度。
+- 覆盖白天、夜间、逆光、阴影以及实际会出现的曝光范围。
+- 可以包含少量无目标背景，但比例应接近真实部署情况。
+- 不需要标签文件；Toolkit 只读取图片统计张量分布。
+- 避免大量连续视频相邻帧、重复图、全黑图、损坏图和无关场景。
+- 校准集不要代替独立测试集；量化后仍需使用独立验证集比较精度。
+- 校准图片的预处理应尽量与板端输入一致。如果板端先做 640×640 letterbox，应确认校准阶段和板端的缩放、颜色顺序、均值和归一化一致。
+
+## 7. 生成 INT8 量化模型
+
+使用默认 `dataset.txt`：
+
+```bash
+cd ~/RKmodel/model_convert
+
+ONNX=model/best.onnx \
+DTYPE=i8 \
+DATASET=dataset.txt \
+OUTPUT=model/best-int8.rknn \
+bash convert.sh
+```
+
+使用自定义清单：
+
+```bash
+ONNX=model/best.onnx \
+DTYPE=i8 \
+DATASET=dataset_val_300.txt \
+OUTPUT=model/best-int8-val300.rknn \
+bash convert.sh
+```
+
+成功日志应包含：
+
+```text
+load_onnx
+build: quant=True dataset=...
+export_rknn: model/best-int8.rknn
+```
+
+当前 `convert.py` 中的 `i8` 和 `u8` 都只是打开 `do_quantization=True`，没有分别设置不同的 `quantized_dtype`；现阶段统一使用 `DTYPE=i8`。
+
+## 8. 参数说明
+
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `IMAGE` | `rknn-convert-152:latest` | 转换镜像名 |
+| `ONNX` | `model/best.onnx` | 输入 ONNX，相对本目录 |
+| `PLATFORM` | `rk3588` | 目标平台 |
+| `DTYPE` | `i8` | `fp` 为非量化；`i8`/`u8` 打开量化 |
+| `DATASET` | `dataset.txt` | 量化校准清单 |
+| `OUTPUT` | 空 | 输出路径；为空时覆盖 ONNX 同名 `.rknn` |
+| `RKNN_WHL_URL` | Dockerfile 内官方地址 | 自动下载 wheel 的地址 |
+
+建议始终显式设置 `OUTPUT`，分别保留 FP 和 INT8 模型。
+
+## 9. 量化后验证
+
+将两个模型都部署到 RK3588，使用同一批独立测试图片或视频比较：
+
+- 各类别检出数量、漏检和误检；
+- 置信度变化；
+- 小目标、远距离目标和遮挡场景；
+- Precision、Recall、mAP（有标注数据时）；
+- 推理耗时和内存占用。
+
+如果 INT8 精度下降明显：
+
+1. 删除重复、模糊或无关校准图；
+2. 增加漏检场景、暗光、小目标和稀有类别图片；
+3. 将校准集从 200 张增加到 300～500 张；
+4. 检查板端预处理与 `convert.py` 中 `mean_values=[[0,0,0]]`、`std_values=[[255,255,255]]` 是否一致；
+5. 对比 FP 模型，确认问题确实来自量化而不是 ONNX 或后处理。
+
+## 10. 上板
+
+```bash
+scp model/best-int8.rknn cat@<板子IP>:~/.../project1/.../model/RK3588/
+```
+
+板端还需要核对：
+
+- 模型路径；
+- `class_num`；
+- 标签顺序；
+- `RK_anchors.txt` 与 `postprocess.cpp` 中 anchors；
+- 输出张量量化参数的反量化处理。
+
+## 11. 常见问题
+
+| 现象 | 原因与处理 |
+|---|---|
+| `not a valid wheel filename` | wheel 被改成了不完整文件名，恢复完整 cp310/ABI/平台标签 |
+| `Unsupported onnx opset 18, need <= 12` | 使用 `model_train/export.sh` 重新导出，必须 opset 12 |
+| `dataset.txt` 为空或找不到图片 | 运行 `prepare_calibration.sh`，并确保清单使用 `/work` 下可见的相对路径 |
+| `CALIB_DIR 已非空` | 换一个新的目标目录，防止混入上一版图片 |
+| FP 成功但量化 `build` 失败 | 检查每个清单路径、图片格式和损坏文件 |
+| INT8 精度下降明显 | 改善校准集代表性并检查预处理一致性 |
+| 板端 `rknn_init` 失败 | PC Toolkit 和板端 `librknnrt.so` 版本不一致 |
+

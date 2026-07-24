@@ -2,9 +2,12 @@
 datasets/
 runs/
 .ultralytics/
-yolov5/                 # git clone 的 airockchip/yolov5(自带 .git，各环境各自 clone，勿提交)
-_patch/                 # 运行时生成的 sitecustomize 补丁
-_yolov5_data.yaml       # prepare_dataset.sh 生成的
+# git clone 的 airockchip/yolov5（自带 .git，各环境各自 clone，勿提交）
+yolov5/
+# 运行时生成的 sitecustomize 补丁
+_patch/
+# prepare_dataset.sh 生成
+_yolov5_data.yaml
 *.pt
 *.onnx
 *.rknn

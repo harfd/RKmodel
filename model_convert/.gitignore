@@ -3,4 +3,6 @@
 *.rknn
 model/
 calib/
-wheels/          # rknn-toolkit2 1.5.2 的 whl+requirements，各环境自行放置(见 README)
+# rknn-toolkit2 1.5.2 的 wheel，各环境自行放置（见 README）
+wheels/
+dataset_*.txt
