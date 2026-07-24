@@ -26,7 +26,7 @@ RUN set -e; \
         echo '[*] 使用本地 wheels/ 里的 whl'; \
     else \
         echo "[*] 本地无 whl，下载: $RKNN_WHL_URL"; \
-        curl -fL "$RKNN_WHL_URL" -o /wheels/rknn_toolkit2-1.5.2-cp310.whl \
+        curl -fL "$RKNN_WHL_URL" -o /wheels/rknn_toolkit2-1.5.2+b642f30c-cp310-cp310-linux_x86_64.whl \
           || { echo '!! 下载失败：github 连不上。改用镜像地址 --build-arg RKNN_WHL_URL=<镜像> 或手动把 whl 放进 wheels/(见 README)'; exit 1; }; \
     fi; \
     pip3 install --no-cache-dir /wheels/rknn_toolkit2-1.5.2*.whl
