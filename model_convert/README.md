@@ -262,3 +262,117 @@ scp model/best-int8.rknn cat@<板子IP>:~/.../project1/.../model/RK3588/
 | INT8 精度下降明显 | 改善校准集代表性并检查预处理一致性 |
 | 板端 `rknn_init` 失败 | PC Toolkit 和板端 `librknnrt.so` 版本不一致 |
 
+## 12. 比较量化前后逐类别 mAP
+
+`accuracy_analysis` 分析的是 RKNN 各层张量误差，不是目标检测的 mAP。逐类别
+mAP 必须让两个模型在**同一套带 YOLO 标签的验证集**上完整推理，再用相同的
+预处理、anchors、置信度阈值和 NMS 统计。
+
+本目录已提供：
+
+```text
+evaluate_rknn.py   # RKNN 推理、YOLOv5 后处理、逐类 AP/mAP 统计
+evaluate_rknn.sh   # 复用转换镜像、挂载模型/验证集并生成对比结果
+```
+
+### 为什么不能直接在 x86 模拟器加载两个 `.rknn`
+
+rknn-toolkit2 1.5.2 的 `load_rknn()` 不支持模拟器推理，直接调用会报：
+
+```text
+RKNN model that loaded by 'load_rknn' not support inference on the simulator
+```
+
+因此脚本提供两种可靠模式：
+
+1. `MODE=rebuild`（默认自动选择）：读取原 ONNX，在同一 Python 进程中分别
+   `build(do_quantization=False/True)`，随即用 Toolkit 模拟器评测。INT8 必须使用
+   正式转换时的同一份校准清单。这是纯 x86/WSL 下最方便的量化损失对比。
+2. `MODE=rknn`：连接实际 RK3588，直接运行现成的 `best-fp.rknn` 和
+   `best-int8.rknn`。这是验证两个最终文件的严格方式。
+
+离线模式默认文件：
+
+```text
+model/best.onnx
+dataset.txt
+../model_train/_yolov5_data.yaml
+../model_train/datasets/construction-ppe
+```
+
+先用少量图片检查推理链路：
+
+```bash
+cd ~/RKmodel/model_convert
+MODE=rebuild LIMIT=20 bash evaluate_rknn.sh
+```
+
+`LIMIT` 非零时不能作为正式 mAP。确认输出形状、类别数和 anchors 均无报错后，
+使用全部验证集：
+
+```bash
+MODE=rebuild bash evaluate_rknn.sh
+```
+
+如需直接验证两个最终 RKNN 文件，把 RK3588 以 Toolkit 支持的 USB/ADB 方式连接
+到转换主机后运行：
+
+```bash
+MODE=rknn \
+TARGET=rk3588 \
+DEVICE_ID=<多设备时填写，单设备可省略> \
+FP_MODEL=model/best-fp.rknn \
+INT8_MODEL=model/best-int8.rknn \
+bash evaluate_rknn.sh
+```
+
+如果模型只放在同级工作区的 `project1/model/`，脚本会自动尝试其中的
+`best-fp.rknn`、`best-int8.rknn` 和 `RK_anchors.txt`。
+
+当前板端通过 RGA 直接缩放到 640×640，所以默认使用 `PREPROCESS=stretch`。
+如果部署代码改成等比例补黑边，则评测也必须改为：
+
+```bash
+PREPROCESS=letterbox bash evaluate_rknn.sh
+```
+
+若模型仍是 construction-ppe 的 11 类输出，但项目目前只显示原始类别
+`0,1,2,6`（helmet、gloves、vest、Person），可只汇总这四类：
+
+```bash
+CLASS_IDS=0,1,2,6 bash evaluate_rknn.sh
+```
+
+这只是选择统计类别，不会把 11 类模型误当成 4 类解码。类别 ID 必须以训练生成的
+`_yolov5_data.yaml` 为准，不能用只有四行的显示标签文件替代完整 names。
+
+其他常用覆盖参数：
+
+```bash
+MODE=rebuild \
+ONNX=model/best.onnx \
+CALIBRATION=dataset.txt \
+ANCHORS=/path/to/RK_anchors.txt \
+DATA_YAML=../model_train/_yolov5_data.yaml \
+DATASET_ROOT=../model_train/datasets/construction-ppe \
+OUTPUT_DIR=eval_results \
+bash evaluate_rknn.sh
+```
+
+结果写入：
+
+```text
+eval_results/fp_metrics.csv
+eval_results/int8_metrics.csv
+eval_results/comparison.csv
+eval_results/metrics.json
+```
+
+`comparison.csv` 中 `delta = INT8 - FP`。重点看每个类别的 `AP50`、
+`mAP50-95` 及其下降量；`targets=0` 的类别没有验证标注，结果留空且不参与平均。
+默认 `CONF=0.001`、`NMS=0.65` 是为 mAP 保留低分候选，不能照搬线上显示阈值。
+
+校准集只用于统计 INT8 张量分布，正式精度不能在校准集上报告；应使用训练过程中
+未参与梯度更新的完整 `images/val + labels/val`，更严格时另留独立 test 集。
+`MODE=rebuild` 虽然需要校准集来重新 build INT8，但计算 AP 的图片仍由
+`data.yaml` 的 `val` 指定，两者用途不会混在一起。

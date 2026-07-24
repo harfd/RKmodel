@@ -163,3 +163,33 @@ clone airockchip/yolov5 → prepare_dataset.sh → train.sh → export.sh(--rknp
   → prepare_calibration.sh → model_convert(1.5.2, i8) → best-int8.rknn → scp
   → 改 class_num/anchors/标签 → 跑起来
 ```
+
+---
+
+## 量化前后逐类别 mAP 验证
+
+在同一套带标签的验证集上依次运行 FP RKNN 和 INT8 RKNN：
+
+```bash
+cd ~/RKmodel/model_convert
+
+# Toolkit 1.5.2 不能在 x86 模拟器直接 load_rknn；
+# 默认从原 ONNX + 同一校准清单分别重建 FP/INT8 后评测。
+MODE=rebuild LIMIT=20 bash evaluate_rknn.sh
+
+# 全量验证集，生成正式逐类 AP50 / mAP50-95 对比
+MODE=rebuild bash evaluate_rknn.sh
+```
+
+如果当前业务只关心 construction-ppe 原始类别 ID `0,1,2,6`：
+
+```bash
+CLASS_IDS=0,1,2,6 bash evaluate_rknn.sh
+```
+
+输出位于 `model_convert/eval_results/comparison.csv`。默认采用与当前板端一致的
+640×640 直接拉伸；只有板端也使用等比例补边时，才设置
+`PREPROCESS=letterbox`。校准集不用于报告 mAP，正式结果必须来自完整验证集或
+独立测试集。若要直接验证两个最终 `.rknn` 文件，需连接 RK3588 后使用
+`MODE=rknn TARGET=rk3588`。详细参数和结果解释见
+`model_convert/README.md` 第 12 节。

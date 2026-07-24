@@ -4,5 +4,7 @@
 model/
 calib/
 # rknn-toolkit2 1.5.2 的 wheel，各环境自行放置（见 README）
-wheels/
+wheels/*
+!wheels/.gitkeep
 dataset_*.txt
+eval_results/
