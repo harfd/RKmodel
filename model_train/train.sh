@@ -28,6 +28,10 @@ GPU_FLAG=""; [ "$USE_GPU" = "1" ] && GPU_FLAG="--gpus all"
 docker image inspect "$IMAGE" >/dev/null 2>&1 || docker build -t "$IMAGE" .
 mkdir -p runs _patch
 
+# --weights 路径解析：容器内会 cd 到 /workspace/yolov5，故本地已存在的权重(如 runs/ppe/weights/last.pt)
+# 要加 /workspace/ 前缀；裸名(如 yolov5s.pt)保持原样，让 yolov5 自动下载。
+if [ -f "$WEIGHTS" ]; then WEIGHTS_ARG="/workspace/$WEIGHTS"; else WEIGHTS_ARG="$WEIGHTS"; fi
+
 # sitecustomize 补丁：让 torch.load 默认 weights_only=False（PyTorch>=2.6 加载旧 yolov5 权重需要）
 cat > _patch/sitecustomize.py <<'PYEOF'
 try:
@@ -72,7 +76,7 @@ docker run --rm -it $GPU_FLAG --ipc=host \
     pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt 2>/dev/null || true
     export PYTHONPATH=/workspace/_patch:\${PYTHONPATH:-}
     python train.py \
-      --data /workspace/$DATA_YAML --cfg $CFG --weights $WEIGHTS \
+      --data /workspace/$DATA_YAML --cfg $CFG --weights $WEIGHTS_ARG \
       --img $IMGSZ --epochs $EPOCHS --batch-size $BATCH \
       --project /workspace/runs --name $NAME --exist-ok
   "
