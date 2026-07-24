@@ -49,11 +49,16 @@ docker run --rm -it -v "$(pwd)":/workspace -w /workspace "$IMAGE" bash -lc "
   git config --global --add safe.directory '*'
   export PYTHONPATH=/workspace/_patch:\${PYTHONPATH:-}
   grep -viE '^[[:space:]]*(torch|torchvision)([[:space:]]|>|=|<|\$)' requirements.txt > /tmp/req.txt 2>/dev/null || cp requirements.txt /tmp/req.txt
-  pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt 2>/dev/null || true
+  pip install -q -i https://pypi.tuna.tsinghua.edu.cn/simple -r /tmp/req.txt onnx onnxscript 2>/dev/null || true
   python export.py --rknpu --weight /workspace/$WEIGHTS
 "
 
 ONNX="${WEIGHTS%.pt}.onnx"
-echo "[✓] 已导出 RKNN 友好 ONNX： model_train/$ONNX"
-echo "    同时生成 RK_anchors.txt（anchor 值）—— 板端 postprocess.cpp 的 anchor 要与之一致"
-echo "    下一步： 拷到 ../model_convert/model/ 用 1.5.2 容器做 i8 量化"
+if [ -f "$ONNX" ]; then
+  echo "[✓] 已导出 RKNN 友好 ONNX： model_train/$ONNX"
+  echo "    同时生成 RK_anchors.txt（anchor 值）—— 板端 postprocess.cpp 的 anchor 要与之一致"
+  echo "    下一步： 拷到 ../model_convert/model/ 用 1.5.2 容器做 i8 量化"
+else
+  echo "[✗] 导出失败：未生成 $ONNX（见上方 export failure 报错）。补依赖后重试。"
+  exit 1
+fi
